@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: salud del prototipo
+ok 1 - salud del prototipo
+  ---
+  duration_ms: 30.581092
+  type: 'test'
+  ...
+# Subtest: login ciudadano, creación y consulta de reporte
+ok 2 - login ciudadano, creación y consulta de reporte
+  ---
+  duration_ms: 53.555107
+  type: 'test'
+  ...
+# Subtest: administrador actualiza estado y queda trazabilidad
+ok 3 - administrador actualiza estado y queda trazabilidad
+  ---
+  duration_ms: 50.032728
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 278.827975

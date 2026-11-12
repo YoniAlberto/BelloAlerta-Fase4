@@ -1,0 +1,21 @@
+{
+  "name": "bello-alerta-fase4",
+  "version": "1.0.0",
+  "description": "Prototipo funcional TRL5 - reporte ciudadano georreferenciado para riesgos por movimientos en masa en Bello, Antioquia.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node server-demo.js",
+    "seed": "node scripts/seed.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

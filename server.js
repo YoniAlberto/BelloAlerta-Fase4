@@ -1,0 +1,36 @@
+const express = require('express');
+const path = require('path');
+const crypto = require('crypto');
+const {Pool} = require('pg');
+
+const app = express();
+const PORT = Number(process.env.PORT || 3000);
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://bello:bello@localhost:5432/bello_alerta';
+const pool = new Pool({connectionString:DATABASE_URL});
+const sessions = new Map();
+
+app.use(express.json({limit:'3mb'}));
+app.use(express.static(path.join(__dirname,'public')));
+
+function verifyPassword(password, stored){
+  const [salt,hash]=String(stored||'').split(':');
+  if(!salt||!hash) return false;
+  const calc=crypto.scryptSync(password,salt,64); const expected=Buffer.from(hash,'hex');
+  return expected.length===calc.length && crypto.timingSafeEqual(calc,expected);
+}
+function tokenFor(user){const token=crypto.randomBytes(24).toString('hex'); sessions.set(token,{userId:user.id,role:user.role,expires:Date.now()+8*60*60*1000}); return token;}
+function requireAuth(req,res,next){const h=req.headers.authorization||'';const token=h.startsWith('Bearer ')?h.slice(7):'';const s=sessions.get(token);if(!s||Date.now()>s.expires){if(s)sessions.delete(token);return res.status(401).json({error:'Sesión no válida'});}req.sessionUser=s;next();}
+function parseReport(row){return {id:row.id,code:row.code,userId:row.user_id,category:row.category,description:row.description,sector:row.sector,perceivedLevel:row.perceived_level,observedAt:row.observed_at instanceof Date?row.observed_at.toISOString().slice(0,10):row.observed_at,lat:Number(row.lat),lng:Number(row.lng),photoData:row.photo_data||'',status:row.status,createdAt:row.created_at,updatedAt:row.updated_at};}
+
+app.get('/api/health',async(req,res)=>{try{await pool.query('SELECT 1');res.json({ok:true,mode:'postgres-postgis',trl:'TRL5-demostracion-controlada'});}catch(e){res.status(503).json({ok:false,error:e.message});}});
+app.post('/api/login',async(req,res)=>{const {email,password}=req.body||{};const q=await pool.query('SELECT id,name,email,password_hash,role FROM users WHERE lower(email)=lower($1)',[email||'']);const user=q.rows[0];if(!user||!verifyPassword(String(password||''),user.password_hash))return res.status(401).json({error:'Credenciales inválidas'});const token=tokenFor(user);res.json({token,user:{id:user.id,name:user.name,email:user.email,role:user.role}});});
+app.get('/api/me',requireAuth,async(req,res)=>{const q=await pool.query('SELECT id,name,email,role FROM users WHERE id=$1',[req.sessionUser.userId]);res.json(q.rows[0]);});
+app.get('/api/stats',requireAuth,async(req,res)=>{const where=req.sessionUser.role==='admin'?'':'WHERE user_id=$1';const params=req.sessionUser.role==='admin'?[]:[req.sessionUser.userId];const q=await pool.query(`SELECT COUNT(*)::int total, COUNT(*) FILTER (WHERE status='Registrado')::int registered, COUNT(*) FILTER (WHERE status='En revisión')::int review, COUNT(*) FILTER (WHERE status='Atendido')::int attended, COUNT(*) FILTER (WHERE perceived_level='Alto')::int high FROM reports ${where}`,params);res.json(q.rows[0]);});
+app.get('/api/reports',requireAuth,async(req,res)=>{const clauses=[];const params=[];if(req.sessionUser.role!=='admin'){params.push(req.sessionUser.userId);clauses.push(`user_id=$${params.length}`);}if(req.query.status){params.push(req.query.status);clauses.push(`status=$${params.length}`);}if(req.query.sector){params.push(req.query.sector);clauses.push(`sector=$${params.length}`);}if(req.query.q){params.push(`%${String(req.query.q)}%`);clauses.push(`(code ILIKE $${params.length} OR category ILIKE $${params.length} OR description ILIKE $${params.length} OR sector ILIKE $${params.length})`);}const where=clauses.length?'WHERE '+clauses.join(' AND '):'';const q=await pool.query(`SELECT *, ST_Y(location::geometry) lat, ST_X(location::geometry) lng FROM reports ${where} ORDER BY created_at DESC`,params);res.json(q.rows.map(parseReport));});
+app.get('/api/reports/:id',requireAuth,async(req,res)=>{const q=await pool.query('SELECT *, ST_Y(location::geometry) lat, ST_X(location::geometry) lng FROM reports WHERE id=$1',[req.params.id]);if(!q.rows[0])return res.status(404).json({error:'Reporte no encontrado'});const r=parseReport(q.rows[0]);if(req.sessionUser.role!=='admin'&&r.userId!==req.sessionUser.userId)return res.status(403).json({error:'Acceso denegado'});const h=await pool.query('SELECT id,report_id reportId,user_id userId,status,note,created_at createdAt FROM report_history WHERE report_id=$1 ORDER BY created_at',[r.id]);r.history=h.rows;res.json(r);});
+app.post('/api/reports',requireAuth,async(req,res)=>{if(req.sessionUser.role!=='citizen')return res.status(403).json({error:'Solo ciudadanos pueden crear reportes'});const b=req.body||{};const required=['category','description','sector','perceivedLevel','observedAt','lat','lng'];const missing=required.filter(k=>b[k]===undefined||b[k]==='');if(missing.length)return res.status(400).json({error:'Faltan campos: '+missing.join(', ')});const client=await pool.connect();try{await client.query('BEGIN');const next=await client.query("SELECT COALESCE(MAX(id),0)+1 next FROM reports");const code=`BR-${String(28+Number(next.rows[0].next)).padStart(3,'0')}`;const q=await client.query(`INSERT INTO reports(code,user_id,category,description,sector,perceived_level,observed_at,location,photo_data,status) VALUES($1,$2,$3,$4,$5,$6,$7,ST_SetSRID(ST_MakePoint($8,$9),4326)::geography,$10,'Registrado') RETURNING *,ST_Y(location::geometry) lat,ST_X(location::geometry) lng`,[code,req.sessionUser.userId,b.category,b.description,b.sector,b.perceivedLevel,b.observedAt,Number(b.lng),Number(b.lat),b.photoData||'']);await client.query("INSERT INTO report_history(report_id,user_id,status,note) VALUES($1,$2,'Registrado','Reporte ciudadano creado.')",[q.rows[0].id,req.sessionUser.userId]);await client.query('COMMIT');res.status(201).json(parseReport(q.rows[0]));}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}});
+app.patch('/api/reports/:id',requireAuth,async(req,res)=>{if(req.sessionUser.role!=='admin')return res.status(403).json({error:'Solo administración puede actualizar estados'});const {status,note}=req.body||{};if(!['Registrado','En revisión','Atendido'].includes(status))return res.status(400).json({error:'Estado inválido'});const client=await pool.connect();try{await client.query('BEGIN');const q=await client.query(`UPDATE reports SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *,ST_Y(location::geometry) lat,ST_X(location::geometry) lng`,[status,req.params.id]);if(!q.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'Reporte no encontrado'});}await client.query('INSERT INTO report_history(report_id,user_id,status,note) VALUES($1,$2,$3,$4)',[req.params.id,req.sessionUser.userId,status,note||'Actualización administrativa.']);await client.query('COMMIT');res.json(parseReport(q.rows[0]));}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}});
+
+app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
+app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Error interno',detail:err.message});});
+app.listen(PORT,()=>console.log(`Bello Alerta: http://localhost:${PORT}`));
