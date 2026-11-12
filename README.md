@@ -64,16 +64,5 @@ npm test
 
 Las pruebas verifican: salud del servicio, autenticación, creación de reporte, consulta, actualización administrativa y trazabilidad.
 
-## Estructura
-
-- `public/`: interfaz web.
-- `server.js`: backend Express + PostgreSQL/PostGIS.
-- `server-demo.js`: servidor demostrativo sin dependencias externas.
-- `db/schema.sql`: estructura PostgreSQL/PostGIS.
-- `scripts/seed.js`: datos iniciales.
-- `tests/`: pruebas automatizadas.
-- `docs/`: evidencias y material de entrega.
-
-## GitHub
 
 Subir todo el proyecto excepto los archivos ignorados en `.gitignore`. Cada integrante debe realizar commits identificables para dejar evidencia de trabajo colaborativo.
